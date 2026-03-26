@@ -5,3 +5,4 @@ duckduckgo-search==6.1.7
 pandas==2.2.2
 rich==13.7.1
 lxml==5.2.1
+instaloader==4.15.1

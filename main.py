@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-find-customers — CLI para encontrar potenciais clientes (B2B e B2C).
+find-customers — CLI para encontrar potenciais clientes (B2B e B2C e Instagram).
 
 Uso rápido:
-  python main.py b2b   -k "software de gestão" -l "São Paulo" -n 20
-  python main.py b2c   -k "academia crossfit"  -l "Curitiba"  -n 20
-  python main.py ambos -k "consultoria financeira"            -n 30
+  python main.py b2b        -k "software de gestão" -l "São Paulo" -n 20
+  python main.py b2c        -k "academia crossfit"  -l "Curitiba"  -n 20
+  python main.py ambos      -k "consultoria financeira"            -n 30
+  python main.py instagram  --nicho ambos --min-seg 1000 --max-seg 8000
 """
 import sys
+from dataclasses import asdict
 
 import click
 from rich.console import Console
@@ -15,6 +17,7 @@ from rich.table import Table
 
 from exporters import exportar_csv, exportar_json
 from searchers import Lead, buscar_b2b, buscar_b2c
+from instagram_scraper import ContaInstagram, buscar_instagram
 
 console = Console()
 
@@ -181,6 +184,115 @@ def ambos(keywords, localizacao, max_resultados, saida, formato, enriquecer, set
 
     _exibir_tabela(todos, f"Leads B2B + B2C — {keywords}")
     _salvar(todos, saida, formato)
+
+
+# ---------------------------------------------------------------------------
+# Comando: instagram
+# ---------------------------------------------------------------------------
+@cli.command()
+@click.option(
+    "--nicho",
+    "-ni",
+    type=click.Choice(["dropshipping", "loja_fisica", "ambos"]),
+    default="ambos",
+    show_default=True,
+    help="Nicho alvo: dropshipping, loja_fisica ou ambos",
+)
+@click.option("--min-seg", default=1000, show_default=True, help="Mínimo de seguidores")
+@click.option("--max-seg", default=8000, show_default=True, help="Máximo de seguidores")
+@click.option("--max-resultados", "-n", default=30, show_default=True, help="Limite de contas")
+@click.option(
+    "--saida", "-o", default="leads_instagram.csv", show_default=True, help="Arquivo de saída"
+)
+@click.option(
+    "--formato",
+    "-f",
+    type=click.Choice(["csv", "json"]),
+    default="csv",
+    show_default=True,
+    help="Formato do arquivo de saída",
+)
+@click.option("--usuario", "-u", default="", help="Login do Instagram (recomendado)")
+@click.option("--senha", "-s", default="", help="Senha do Instagram")
+@click.option(
+    "--max-posts",
+    default=50,
+    show_default=True,
+    help="Quantidade de posts a analisar por hashtag",
+)
+def instagram(nicho, min_seg, max_seg, max_resultados, saida, formato, usuario, senha, max_posts):
+    """Busca contas do Instagram no nicho de dropshipping/lojas físicas (1k–8k seguidores)."""
+    if not usuario:
+        console.print(
+            "[yellow]Aviso:[/] sem login, o Instagram pode bloquear após poucos resultados. "
+            "Use --usuario e --senha para sessões mais longas."
+        )
+
+    console.print(
+        f"\n[bold]Buscando leads no Instagram:[/] nicho={nicho} | "
+        f"seguidores={min_seg:,}–{max_seg:,}",
+        highlight=False,
+    )
+
+    try:
+        with console.status("Pesquisando hashtags no Instagram..."):
+            contas = buscar_instagram(
+                nicho=nicho,
+                min_seguidores=min_seg,
+                max_seguidores=max_seg,
+                max_resultados=max_resultados,
+                max_posts_por_hashtag=max_posts,
+                usuario_instagram=usuario,
+                senha_instagram=senha,
+            )
+    except RuntimeError as e:
+        console.print(f"[red]Erro:[/] {e}")
+        sys.exit(1)
+
+    if not contas:
+        console.print("[yellow]Nenhuma conta encontrada. Tente ajustar os filtros.[/]")
+        sys.exit(0)
+
+    # Exibir tabela
+    table = Table(title=f"Leads Instagram — {nicho} ({min_seg:,}–{max_seg:,} seguidores)", show_lines=True)
+    table.add_column("#", style="dim", width=4)
+    table.add_column("Username", style="bold cyan", max_width=25)
+    table.add_column("Nome", max_width=25)
+    table.add_column("Seguidores", style="magenta", width=11)
+    table.add_column("Comercial", style="yellow", width=10)
+    table.add_column("Categoria", max_width=20)
+    table.add_column("Email/Tel", style="green", max_width=28)
+    table.add_column("Nicho", style="blue", width=12)
+
+    for i, c in enumerate(contas, 1):
+        contato = c.email_bio or c.telefone_bio or "—"
+        table.add_row(
+            str(i),
+            f"@{c.username}",
+            c.nome_completo[:25] or "—",
+            f"{c.seguidores:,}",
+            "Sim" if c.perfil_comercial else "Não",
+            c.categoria[:20] or "—",
+            contato[:28],
+            c.nicho,
+        )
+    console.print(table)
+
+    # Salvar
+    dados = [asdict(c) for c in contas]
+    import csv, json
+    from pathlib import Path
+    path = Path(saida)
+    if formato == "csv":
+        with path.open("w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(f, fieldnames=list(dados[0].keys()))
+            writer.writeheader()
+            writer.writerows(dados)
+    else:
+        with path.open("w", encoding="utf-8") as f:
+            json.dump(dados, f, ensure_ascii=False, indent=2)
+
+    console.print(f"\n[bold green]✓[/] {len(contas)} contas salvas em [bold]{saida}[/]")
 
 
 if __name__ == "__main__":
